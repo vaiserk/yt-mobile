@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.YtMobile" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/acento</item>
+        <item name="colorOnPrimary">@color/branco</item>
+        <item name="colorSecondaryContainer">#3A1A1E</item>
+        <item name="colorOnSecondaryContainer">@color/texto</item>
+        <item name="android:colorBackground">@color/fundo</item>
+        <item name="colorSurface">@color/fundo</item>
+        <item name="android:statusBarColor">@color/fundo</item>
+        <item name="android:navigationBarColor">@color/fundo</item>
+    </style>
+</resources>
