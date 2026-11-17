@@ -51,6 +51,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var cancelado = false
 
+    @Volatile
+    private var atualizandoSozinho = false
+
     init {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -76,7 +79,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _estado.update {
             it.copy(
                 ocupado = true, mostrarCard = true, erro = false, titulo = "",
-                etapa = "Lendo informações do vídeo...", progresso = null, detalhe = "", arquivo = null,
+                etapa = if (atualizandoSozinho) "Terminando de atualizar o yt-dlp..." else "Lendo informações do vídeo...",
+                progresso = null, detalhe = "", arquivo = null,
             )
         }
 
@@ -87,24 +91,31 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val req = YoutubeDLRequest(url)
                     req.addOption("--no-playlist")
                     req.addOption("-o", "${pasta.absolutePath}/%(title).80B.%(ext)s")
+                    // Cache persistente: o yt-dlp guarda a "chave" do player do YouTube e não precisa
+                    // resolver tudo de novo a cada download (era isso que deixava lento)
+                    req.addOption("--cache-dir", File(getApplication<Application>().filesDir, "yt-dlp-cache").absolutePath)
                     if (formato == Formato.MP3) {
+                        req.addOption("-f", "ba/b")
                         req.addOption("-x")
                         req.addOption("--audio-format", "mp3")
                         req.addOption("--audio-quality", "192K")
                     } else {
-                        val h = formato.altura
-                        // Prioriza H.264 + AAC: toca em qualquer celular
-                        req.addOption(
-                            "-f",
-                            "bv*[vcodec^=avc1][height<=$h]+ba[ext=m4a]/b[ext=mp4][height<=$h]/" +
-                                "bv*[height<=$h]+ba/b[height<=$h]/b",
-                        )
+                        // Pega a qualidade escolhida; se não existir, a mais próxima abaixo
+                        // (e se não tiver nada abaixo, a mais próxima acima). Prefere H.264 + AAC.
+                        req.addOption("-f", "bv*+ba/b")
+                        req.addOption("-S", "res:${formato.altura},vcodec:h264,acodec:m4a")
                         req.addOption("--merge-output-format", "mp4")
                     }
 
                     var parte = 0
                     YoutubeDL.getInstance().execute(req, id) { progresso, eta, linha ->
                         when {
+                            linha.contains("Downloading webpage") || linha.contains("player API JSON") ->
+                                _estado.update { it.copy(etapa = "Conectando ao YouTube...", progresso = null) }
+                            linha.contains("Downloading player") || linha.contains("Solving JS challenges") ->
+                                _estado.update {
+                                    it.copy(etapa = "Liberando o vídeo (só demora na primeira vez)...", progresso = null)
+                                }
                             linha.startsWith("[download]") && linha.contains("Destination:") -> {
                                 parte++
                                 val nome = File(linha.substringAfter("Destination:").trim()).name
@@ -171,6 +182,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val agora = System.currentTimeMillis()
         if (automatico && agora - prefs.getLong("ultimaAtualizacao", 0L) < 24 * 60 * 60 * 1000L) return
         if (!trava.tryLock()) return
+        atualizandoSozinho = automatico
         try {
             if (!automatico) {
                 _estado.update {
@@ -194,6 +206,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 _estado.update { it.copy(ocupado = false, erro = true, etapa = "Não deu pra atualizar: ${e.message}") }
             }
         } finally {
+            atualizandoSozinho = false
             trava.unlock()
         }
     }

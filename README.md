@@ -11,7 +11,7 @@ Abre o link no celular, baixa e instala. Se o Android pedir, libera "instalar ap
 
 - **Jeito rápido:** no YouTube, toca em **Compartilhar → YT Mobile**, escolhe o formato e toca em **Baixar**.
 - Ou copia o link, abre o app e toca em **Colar**.
-- Formatos: **1080p / 720p / 480p** (MP4) ou **MP3**.
+- Formatos: **1080p / 720p / 480p** (MP4) ou **MP3**. Se a qualidade escolhida não existir no vídeo, ele baixa a mais próxima.
 - Vídeos vão pra **Filmes/YT Mobile** (aparecem na galeria) e músicas pra **Música/YT Mobile**.
 - Se o YouTube começar a dar erro, toca em **Atualizar yt-dlp** no rodapé. O app também se atualiza sozinho uma vez por dia.
 
