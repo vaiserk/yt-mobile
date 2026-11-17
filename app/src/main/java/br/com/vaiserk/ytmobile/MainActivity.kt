@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity() {
         b.cancelar.setOnClickListener { vm.cancelar() }
         b.abrir.setOnClickListener { abrirArquivo() }
         b.atualizar.setOnClickListener { vm.atualizar() }
+        b.galeria.setOnClickListener { startActivity(Intent(this, GaleriaActivity::class.java)) }
 
         tratarIntent(intent)
 
@@ -119,10 +120,11 @@ class MainActivity : AppCompatActivity() {
     private fun abrirArquivo() {
         val e = vm.estado.value
         val uri = e.arquivo ?: return
-        val abrir = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, e.mime)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        runCatching { startActivity(Intent.createChooser(abrir, "Abrir com")) }
+        PlayerActivity.abrir(
+            this,
+            listOf(ItemMidia(uri, e.titulo, 0L, 0L, 0L, e.mime?.startsWith("audio") == true)),
+            0,
+        )
     }
 
     private fun extrairLink(texto: String): String? = Regex("https?://\\S+").find(texto)?.value
