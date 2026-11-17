@@ -3,15 +3,17 @@ package br.com.vaiserk.ytmobile
 import android.app.Application
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.core.content.ContextCompat
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +30,7 @@ enum class Formato(val altura: Int?) { P1080(1080), P720(720), P480(480), MP3(nu
 data class Estado(
     val iniciado: Boolean = false,
     val ocupado: Boolean = false,
+    val baixando: Boolean = false, // true só em download (não em atualização)
     val mostrarCard: Boolean = false,
     val titulo: String = "",
     val etapa: String = "",
@@ -39,13 +42,20 @@ data class Estado(
     val versao: String = "",
 )
 
-class MainViewModel(app: Application) : AndroidViewModel(app) {
+/**
+ * Faz o trabalho pesado (yt-dlp + FFmpeg). Fica fora da tela de propósito:
+ * o download continua mesmo se a Activity for fechada, e o DownloadService
+ * mantém o processo vivo com a tela desligada / app em segundo plano.
+ */
+object Downloader {
 
     private val _estado = MutableStateFlow(Estado())
     val estado: StateFlow<Estado> = _estado.asStateFlow()
 
+    private val escopo = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val trava = Mutex()
-    private val prefs = app.getSharedPreferences("config", Context.MODE_PRIVATE)
+    private lateinit var app: Application
+    private var iniciou = false
     private var processoAtual: String? = null
 
     @Volatile
@@ -54,17 +64,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     @Volatile
     private var atualizandoSozinho = false
 
-    init {
-        viewModelScope.launch(Dispatchers.IO) {
+    @Synchronized
+    fun iniciar(contexto: Context) {
+        if (iniciou) return
+        iniciou = true
+        app = contexto.applicationContext as Application
+        escopo.launch {
             try {
-                YoutubeDL.getInstance().init(getApplication<Application>())
-                FFmpeg.getInstance().init(getApplication<Application>())
+                // Restos de downloads interrompidos (app fechado no meio)
+                File(app.cacheDir, "dl").deleteRecursively()
+                YoutubeDL.getInstance().init(app)
+                FFmpeg.getInstance().init(app)
                 _estado.update { it.copy(iniciado = true, versao = versaoYtdlp()) }
                 atualizarYtdlp(automatico = true)
             } catch (e: Exception) {
-                _estado.update {
-                    it.copy(mostrarCard = true, erro = true, etapa = "Falha ao iniciar: ${e.message}")
-                }
+                _estado.update { it.copy(mostrarCard = true, erro = true, etapa = "Falha ao iniciar: ${e.message}") }
             }
         }
     }
@@ -78,30 +92,32 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         processoAtual = id
         _estado.update {
             it.copy(
-                ocupado = true, mostrarCard = true, erro = false, titulo = "",
+                ocupado = true, baixando = true, mostrarCard = true, erro = false, titulo = "",
                 etapa = if (atualizandoSozinho) "Terminando de atualizar o yt-dlp..." else "Lendo informações do vídeo...",
                 progresso = null, detalhe = "", arquivo = null,
             )
         }
+        // Serviço em primeiro plano: segura o processo vivo até acabar
+        runCatching { ContextCompat.startForegroundService(app, Intent(app, DownloadService::class.java)) }
 
-        viewModelScope.launch(Dispatchers.IO) {
+        escopo.launch {
             trava.withLock {
-                val pasta = File(getApplication<Application>().cacheDir, "dl/$id").apply { mkdirs() }
+                val pasta = File(app.cacheDir, "dl/$id").apply { mkdirs() }
                 try {
+                    if (cancelado) throw Exception("cancelado")
                     val req = YoutubeDLRequest(url)
                     req.addOption("--no-playlist")
                     req.addOption("-o", "${pasta.absolutePath}/%(title).80B.%(ext)s")
-                    // Cache persistente: o yt-dlp guarda a "chave" do player do YouTube e não precisa
-                    // resolver tudo de novo a cada download (era isso que deixava lento)
-                    req.addOption("--cache-dir", File(getApplication<Application>().filesDir, "yt-dlp-cache").absolutePath)
+                    // Cache persistente: não precisa resolver a proteção do YouTube a cada download
+                    req.addOption("--cache-dir", File(app.filesDir, "yt-dlp-cache").absolutePath)
                     if (formato == Formato.MP3) {
                         req.addOption("-f", "ba/b")
                         req.addOption("-x")
                         req.addOption("--audio-format", "mp3")
                         req.addOption("--audio-quality", "192K")
                     } else {
-                        // Pega a qualidade escolhida; se não existir, a mais próxima abaixo
-                        // (e se não tiver nada abaixo, a mais próxima acima). Prefere H.264 + AAC.
+                        // Qualidade escolhida; se não existir, a mais próxima abaixo (ou acima).
+                        // Prefere H.264 + AAC, que tocam em qualquer celular.
                         req.addOption("-f", "bv*+ba/b")
                         req.addOption("-S", "res:${formato.altura},vcodec:h264,acodec:m4a")
                         req.addOption("--merge-output-format", "mp4")
@@ -148,9 +164,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
                     _estado.update {
                         it.copy(
-                            ocupado = false,
+                            ocupado = false, baixando = false,
                             titulo = arquivo.nameWithoutExtension,
-                            etapa = "Pronto! Salvo em " + if (audio) "Música/YT Mobile" else "Filmes/YT Mobile",
+                            etapa = "Pronto! Tá na Galeria do app.",
                             progresso = 100,
                             detalhe = tamanho(arquivo.length()),
                             arquivo = uri,
@@ -159,7 +175,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 } catch (e: Exception) {
                     val msg = if (cancelado) "Download cancelado." else limparErro(e.message)
-                    _estado.update { it.copy(ocupado = false, erro = !cancelado, etapa = msg, progresso = null, detalhe = "") }
+                    _estado.update {
+                        it.copy(ocupado = false, baixando = false, erro = !cancelado, etapa = msg, progresso = null, detalhe = "")
+                    }
                 } finally {
                     pasta.deleteRecursively()
                     processoAtual = null
@@ -170,17 +188,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancelar() {
         cancelado = true
-        processoAtual?.let { YoutubeDL.getInstance().destroyProcessById(it) }
+        processoAtual?.let { runCatching { YoutubeDL.getInstance().destroyProcessById(it) } }
     }
 
     // ------------------------------------------------------------ atualização do yt-dlp
     fun atualizar() {
-        viewModelScope.launch(Dispatchers.IO) { atualizarYtdlp(automatico = false) }
+        escopo.launch { atualizarYtdlp(automatico = false) }
     }
 
     private fun atualizarYtdlp(automatico: Boolean) {
+        val prefs = app.getSharedPreferences("config", Context.MODE_PRIVATE)
         val agora = System.currentTimeMillis()
-        if (automatico && agora - prefs.getLong("ultimaAtualizacao", 0L) < 24 * 60 * 60 * 1000L) return
+        // Chave por versão do app: atualizar o APK traz um yt-dlp antigo junto, então atualiza de novo
+        val chave = "ultimaAtualizacao_" + versaoApp()
+        if (automatico && agora - prefs.getLong(chave, 0L) < 24 * 60 * 60 * 1000L) return
         if (!trava.tryLock()) return
         atualizandoSozinho = automatico
         try {
@@ -192,8 +213,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             }
-            val status = YoutubeDL.getInstance().updateYoutubeDL(getApplication<Application>(), YoutubeDL.UpdateChannel.STABLE)
-            prefs.edit().putLong("ultimaAtualizacao", agora).apply()
+            val status = YoutubeDL.getInstance().updateYoutubeDL(app, YoutubeDL.UpdateChannel.STABLE)
+            prefs.edit().putLong(chave, agora).apply()
             val v = versaoYtdlp()
             _estado.update { it.copy(versao = v) }
             if (!automatico) {
@@ -212,11 +233,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ------------------------------------------------------------ utilidades
+    private fun versaoApp(): Long =
+        runCatching { app.packageManager.getPackageInfo(app.packageName, 0).longVersionCode }.getOrDefault(0L)
+
     private fun versaoYtdlp(): String =
-        try { YoutubeDL.getInstance().version(getApplication<Application>()) ?: "" } catch (e: Exception) { "" }
+        try { YoutubeDL.getInstance().version(app) ?: "" } catch (e: Exception) { "" }
 
     private fun salvarNaGaleria(arquivo: File, mime: String, audio: Boolean): Uri {
-        val resolver = getApplication<Application>().contentResolver
+        val resolver = app.contentResolver
         val colecao = if (audio) {
             MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         } else {
@@ -277,6 +301,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             "Private video" in linha -> "Esse vídeo é privado."
             "Sign in to confirm" in linha -> "O YouTube pediu verificação. Toca em \"Atualizar yt-dlp\" e tenta de novo."
             "Video unavailable" in linha -> "Vídeo indisponível."
+            "No space left" in linha || "ENOSPC" in linha -> "Sem espaço no celular."
             "resolve host" in linha || "Failed to resolve" in linha || "Network is unreachable" in linha -> "Sem internet."
             else -> linha.take(300)
         }

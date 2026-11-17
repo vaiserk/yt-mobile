@@ -4,10 +4,12 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
-import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import androidx.activity.viewModels
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -19,13 +21,17 @@ import kotlinx.coroutines.launch
 class MainActivity : AppCompatActivity() {
 
     private lateinit var b: ActivityMainBinding
-    private val vm: MainViewModel by viewModels()
+    private val vm = Downloader
+
+    // Pede uma vez a permissão de notificação (pra mostrar o progresso do download)
+    private val pedirNotificacao = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     private val prefs by lazy { getSharedPreferences("config", MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
+        Downloader.iniciar(this)
 
         // Formato: lembra o último escolhido
         val salvo = runCatching { Formato.valueOf(prefs.getString("formato", null) ?: "P720") }.getOrDefault(Formato.P720)
@@ -80,6 +86,12 @@ class MainActivity : AppCompatActivity() {
         b.campoUrl.error = null
         getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(b.url.windowToken, 0)
         b.url.clearFocus()
+        if (Build.VERSION.SDK_INT >= 33 && !prefs.getBoolean("pediuNotificacao", false) &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            prefs.edit().putBoolean("pediuNotificacao", true).apply()
+            pedirNotificacao.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
         vm.baixar(extrairLink(url) ?: url, formatoDe(b.formatos.checkedButtonId))
     }
 
@@ -87,7 +99,8 @@ class MainActivity : AppCompatActivity() {
         b.baixar.isEnabled = e.iniciado && !e.ocupado
         b.baixar.text = when {
             !e.iniciado -> "Preparando..."
-            e.ocupado -> "Baixando..."
+            e.baixando -> "Baixando..."
+            e.ocupado -> "Aguarde..."
             else -> "Baixar"
         }
         b.atualizar.isEnabled = e.iniciado && !e.ocupado
@@ -110,11 +123,9 @@ class MainActivity : AppCompatActivity() {
         if (!indeterminada) b.barra.setProgressCompat(e.progresso ?: 0, true)
         b.barra.visibility = if (e.ocupado) View.VISIBLE else View.GONE
 
-        b.cancelar.visibility = if (e.ocupado) View.VISIBLE else View.GONE
+        b.cancelar.visibility = if (e.baixando) View.VISIBLE else View.GONE
         b.abrir.visibility = if (!e.ocupado && e.arquivo != null) View.VISIBLE else View.GONE
 
-        if (e.ocupado) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun abrirArquivo() {
