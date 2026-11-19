@@ -4,3 +4,13 @@ local.properties
 .idea/
 *.iml
 .DS_Store
+
+# Windows (gerados no build)
+windows/bin/
+windows/dist/
+windows/build/
+windows/saida/
+windows/*.spec
+windows/icone.ico
+windows/versao.py
+__pycache__/

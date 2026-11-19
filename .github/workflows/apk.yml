@@ -1,4 +1,4 @@
-name: Gerar APK
+name: Gerar apps
 
 on:
   push:
@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   apk:
+    name: Android (APK)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -29,12 +30,82 @@ jobs:
       - name: Renomear
         run: cp app/build/outputs/apk/release/app-release.apk yt-mobile.apk
 
-      - name: Publicar release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: yt-mobile.apk
+
+  windows:
+    name: Windows (instalador)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependências
+        run: pip install pyside6 pyinstaller pillow
+
+      - name: Baixar yt-dlp, FFmpeg e Deno
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          New-Item -ItemType Directory -Force bin\ffmpeg | Out-Null
+          Invoke-WebRequest https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe -OutFile bin\yt-dlp.exe
+          Invoke-WebRequest https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          Get-ChildItem ffmpeg-tmp -Recurse -Include ffmpeg.exe,ffprobe.exe | Copy-Item -Destination bin\ffmpeg
+          Invoke-WebRequest https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip -OutFile deno.zip
+          Expand-Archive deno.zip -DestinationPath bin
+          Get-ChildItem bin -Recurse | Format-Table FullName, Length
+          bin\yt-dlp.exe --version
+          bin\deno.exe --version
+          bin\ffmpeg\ffmpeg.exe -version | Select-Object -First 1
+
+      - name: Versão e ícone
+        run: |
+          "VERSAO = `"1.0.${{ github.run_number }}`"" | Out-File -Encoding utf8 versao.py
+          python gerar_icone.py
+
+      - name: Empacotar (PyInstaller)
+        run: pyinstaller --noconfirm --windowed --name "YT Mobile" --icon icone.ico --exclude-module tkinter app.py
+
+      - name: Criar instalador (Inno Setup)
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc "/DAppVer=1.0.${{ github.run_number }}" instalador.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem saida | Format-Table Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: windows/saida/yt-mobile-windows-setup.exe
+
+  release:
+    name: Publicar
+    needs: [apk, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: arquivos
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.0.${{ github.run_number }}
           name: YT Mobile 1.0.${{ github.run_number }}
           make_latest: true
-          files: yt-mobile.apk
+          files: |
+            arquivos/yt-mobile.apk
+            arquivos/yt-mobile-windows-setup.exe
           body: |
-            Toca em **yt-mobile.apk** aqui embaixo pra baixar e instalar.
+            **Android:** toca em **yt-mobile.apk** pra baixar e instalar.
+            **Windows:** baixa **yt-mobile-windows-setup.exe** e abre. Se aparecer "O Windows protegeu o computador", clica em *Mais informações* → *Executar assim mesmo*.
