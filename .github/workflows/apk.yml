@@ -84,6 +84,10 @@ jobs:
           if (-not (Test-Path teste.txt)) { throw "O app não gravou o resultado do teste" }
           Get-Content teste.txt
           if (-not (Select-String -Path teste.txt -Pattern "iniciado=True" -Quiet)) { throw "Motor não iniciou" }
+          # a autoatualização do yt-dlp pode ainda estar rodando: espera terminar
+          Get-Process yt-dlp -ErrorAction SilentlyContinue | Wait-Process -Timeout 60 -ErrorAction SilentlyContinue
+          Get-Process yt-dlp -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 2
           Remove-Item -Recurse "dist\YT Mobile\bin"
 
       - name: Testar download real (pode falhar se o YouTube bloquear o servidor do GitHub)
