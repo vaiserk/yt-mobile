@@ -996,6 +996,21 @@ def main():
     app.setWindowIcon(icone_app())
     j = Janela()
     j.show()
+
+    teste = os.environ.get("YTM_TESTE")
+    if teste:  # usado no GitHub Actions: abre, espera o motor iniciar e grava o resultado
+        inicio = time.time()
+
+        def checar():
+            e = j.motor.estado
+            if e.iniciado or e.erro or time.time() - inicio > 60:
+                Path(teste).write_text(
+                    f"iniciado={e.iniciado} erro={e.erro} versao={e.versao} etapa={e.etapa}\n"
+                    f"ytdlp={binario('yt-dlp')}\nvideos={pasta_videos()}\n", encoding="utf-8")
+                app.quit()
+        t = QTimer(j)
+        t.timeout.connect(checar)
+        t.start(500)
     sys.exit(app.exec())
 
 

@@ -75,6 +75,23 @@ jobs:
       - name: Empacotar (PyInstaller)
         run: pyinstaller --noconfirm --windowed --name "YT Mobile" --icon icone.ico --exclude-module tkinter app.py
 
+      - name: Testar se o app abre
+        run: |
+          Copy-Item -Recurse bin "dist\YT Mobile\bin"
+          $env:YTM_TESTE = "$PWD\teste.txt"
+          $p = Start-Process "dist\YT Mobile\YT Mobile.exe" -PassThru
+          if (-not $p.WaitForExit(90000)) { $p.Kill(); throw "O app não fechou sozinho no teste" }
+          if (-not (Test-Path teste.txt)) { throw "O app não gravou o resultado do teste" }
+          Get-Content teste.txt
+          if (-not (Select-String -Path teste.txt -Pattern "iniciado=True" -Quiet)) { throw "Motor não iniciou" }
+          Remove-Item -Recurse "dist\YT Mobile\bin"
+
+      - name: Testar download real (pode falhar se o YouTube bloquear o servidor do GitHub)
+        continue-on-error: true
+        run: |
+          bin\yt-dlp.exe --no-playlist --ffmpeg-location bin\ffmpeg -f "bv*+ba/b" -S "res:360,vcodec:h264,acodec:m4a" --merge-output-format mp4 -o "teste-dl\%(title).80B.%(ext)s" "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+          Get-ChildItem teste-dl | Format-Table Name, Length
+
       - name: Criar instalador (Inno Setup)
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
